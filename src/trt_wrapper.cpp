@@ -5,6 +5,9 @@
 #include <dlfcn.h>
 #include <stdexcept>
 
+// Initialize static logger
+TRTWrapper::Logger TRTWrapper::gLogger;
+
 void TRTWrapper::Logger::log(Severity severity, const char* msg) noexcept {
     if (severity <= Severity::kWARNING) {
         std::cout << "[TRT] " << msg << std::endl;
@@ -12,8 +15,12 @@ void TRTWrapper::Logger::log(Severity severity, const char* msg) noexcept {
 }
 
 TRTWrapper::TRTWrapper(const std::string& engine_path, cudaStream_t stream) : stream(stream) {
-    // 1. Initialize plugins
-    initLibNvInferPlugins(&logger, "");
+    // 1. Initialize plugins once
+    static bool plugins_initialized = false;
+    if (!plugins_initialized) {
+        initLibNvInferPlugins(&gLogger, "");
+        plugins_initialized = true;
+    }
 
     // 2. Load custom GridSample3D plugin manually
     void* handle = dlopen("/opt/FasterLivePortrait/src/utils/libgrid_sample_3d_plugin.so", RTLD_GLOBAL | RTLD_NOW);
@@ -36,15 +43,15 @@ TRTWrapper::TRTWrapper(const std::string& engine_path, cudaStream_t stream) : st
     file.close();
 
     // 4. Deserialize
-    runtime.reset(nvinfer1::createInferRuntime(logger));
+    runtime.reset(nvinfer1::createInferRuntime(gLogger));
     engine.reset(runtime->deserializeCudaEngine(buffer.data(), size));
     if (!engine) {
-        throw std::runtime_error("Failed to deserialize CUDA engine");
+        throw std::runtime_error("Failed to deserialize CUDA engine: " + engine_path);
     }
 
     context.reset(engine->createExecutionContext());
     if (!context) {
-        throw std::runtime_error("Failed to create execution context");
+        throw std::runtime_error("Failed to create execution context for: " + engine_path);
     }
 
     // 5. Inspect bindings
@@ -65,13 +72,23 @@ bool TRTWrapper::execute(const std::map<std::string, void*>& inputs,
     
     // Set input shapes and addresses
     for (const auto& [name, ptr] : inputs) {
-        context->setInputShape(name.c_str(), engine->getTensorShape(name.c_str()));
-        context->setTensorAddress(name.c_str(), ptr);
+        if (engine->getTensorIOMode(name.c_str()) == nvinfer1::TensorIOMode::kINPUT) {
+            context->setInputShape(name.c_str(), engine->getTensorShape(name.c_str()));
+            context->setTensorAddress(name.c_str(), ptr);
+        } else {
+            std::cerr << "Error: " << name << " is not an input tensor" << std::endl;
+            return false;
+        }
     }
 
     // Set output addresses
     for (const auto& [name, ptr] : outputs) {
-        context->setTensorAddress(name.c_str(), ptr);
+        if (engine->getTensorIOMode(name.c_str()) == nvinfer1::TensorIOMode::kOUTPUT) {
+            context->setTensorAddress(name.c_str(), ptr);
+        } else {
+            std::cerr << "Error: " << name << " is not an output tensor" << std::endl;
+            return false;
+        }
     }
 
     return context->enqueueV3(stream);

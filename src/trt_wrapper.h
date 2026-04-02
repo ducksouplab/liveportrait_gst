@@ -23,7 +23,9 @@ public:
 private:
     class Logger : public nvinfer1::ILogger {
         void log(Severity severity, const char* msg) noexcept override;
-    } logger;
+    };
+    
+    static Logger gLogger;
 
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
