@@ -22,6 +22,13 @@ This implementation is based on the architecture and custom CUDA kernels defined
 - **Motion Smoothing:** Implements the One-Euro filter to eliminate high-frequency facial jitter.
 - **GStreamer Native:** Subclasses `GstVideoFilter` for easy integration into standard Linux video pipelines.
 
+## Plugin Properties
+
+| Property | Type | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `config-path` | `string` | Path to the directory containing the TensorRT engines (e.g., `./checkpoints`). | `NULL` |
+| `source-image` | `string` | Path to the static source image (e.g., `assets/test_image.jpg`). | `NULL` |
+
 ## Technical Insights (Learnings)
 
 To achieve parity with the original repository, several critical nuances were implemented:
@@ -52,8 +59,6 @@ docker run --rm -v $(pwd):/workspace -w /workspace gst-liveportrait-env bash -c 
 
 ## Usage
 
-Load the plugin by adding its path to `GST_PLUGIN_PATH`.
-
 ### GStreamer Pipeline Example
 ```bash
 docker run --rm --gpus all -v $(pwd):/workspace -w /workspace gst-liveportrait-env bash -c "\
@@ -62,13 +67,24 @@ docker run --rm --gpus all -v $(pwd):/workspace -w /workspace gst-liveportrait-e
     decodebin ! videoconvert ! \
     videocrop left=280 right=280 ! \
     videoscale ! video/x-raw,width=512,height=512,format=RGB ! \
-    liveportrait config-path=/workspace/checkpoints source-image=/workspace/assets/test_image.jpg ! \
+    liveportrait config-path=./checkpoints source-image=assets/test_image.jpg ! \
     videoconvert ! x264enc ! mp4mux ! filesink location=outputs/output.mp4"
 ```
 
-### Plugin Properties
-- `config-path`: Path to the directory containing the TensorRT engines (e.g., `./checkpoints`).
-- `source-image`: Path to the static source image (e.g., `assets/test_image.jpg`).
+### Python Wrapper
+A Python wrapper `liveportrait_process.py` is provided for easier integration into Python-based workflows.
+
+```python
+from liveportrait_process import LivePortraitProcess
+
+processor = LivePortraitProcess(plugin_path="./build")
+processor.process(
+    input_video="assets/video_example.mp4",
+    output_video="outputs/result.mp4",
+    source_image="assets/test_image.jpg",
+    config_path="./checkpoints"
+)
+```
 
 ## Architecture
 
