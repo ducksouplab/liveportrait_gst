@@ -72,19 +72,27 @@ docker run --rm --gpus all -v $(pwd):/workspace -w /workspace gst-liveportrait-e
 ```
 
 ### Python Wrapper
-A Python wrapper `liveportrait_process.py` is provided for easier integration into Python-based workflows.
+A portable Python wrapper `liveportrait_process.py` is provided. It runs the entire GStreamer pipeline inside Docker, meaning you only need Python and Docker on your host machine.
 
-```python
-from liveportrait_process import LivePortraitProcess
-
-processor = LivePortraitProcess(plugin_path="./build")
-processor.process(
-    input_video="assets/video_example.mp4",
-    output_video="outputs/result.mp4",
-    source_image="assets/test_image.jpg",
-    config_path="./checkpoints"
-)
+```bash
+# Basic Usage
+python3 liveportrait_process.py \
+    --input assets/video_example.mp4 \
+    --output outputs/result.mp4 \
+    --source assets/test_image.jpg \
+    --config checkpoints/
 ```
+
+| Argument | Description | Default |
+| :--- | :--- | :--- |
+| `--input` | Path to driving video. | Required |
+| `--output` | Path to save the result. | Required |
+| `--source` | Path to source image. | Required |
+| `--config` | Path to engines directory. | Required |
+| `--crop-left` | Left crop for 1:1 aspect. | 280 |
+| `--crop-right`| Right crop for 1:1 aspect. | 280 |
+| `--plugin-path`| Path to the build dir. | `./build` |
+
 
 ## Architecture
 
