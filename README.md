@@ -29,6 +29,16 @@ This implementation is based on the architecture and custom CUDA kernels defined
 | `config-path` | `string` | Path to the directory containing the TensorRT engines (e.g., `./checkpoints`). | `NULL` |
 | `source-image` | `string` | Path to the static source image (e.g., `assets/test_image.jpg`). | `NULL` |
 
+## Source Image Constraints
+
+To achieve the best reenactment quality, the `source-image` should ideally follow these guidelines:
+
+-   **Face Orientation:** The person should be front-facing with a neutral expression.
+-   **Lighting:** Clear, even lighting on the face (avoid heavy shadows).
+-   **Resolution:** While the plugin accepts any resolution, it internally performs a **center-crop to a square** and resizes it to **256x256** (for motion) and **224x224** (for landmarks).
+-   **Aspect Ratio:** For the best results, provide a square image where the face is centered. If the image is not square, the plugin will automatically take the center square based on the shortest side.
+-   **Background:** Simple or static backgrounds are recommended to prevent warping artifacts at the edges of the face.
+
 ## Technical Insights (Learnings)
 
 To achieve parity with the original repository, several critical nuances were implemented:
