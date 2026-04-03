@@ -58,12 +58,6 @@ static float headpose_pred_to_degree(const float* pred) {
     return degree * 3.0f - 97.5f;
 }
 
-static float calc_dist(const float* lmk, int idx1, int idx2) {
-    float dx = lmk[idx1*2 + 0] - lmk[idx2*2 + 0];
-    float dy = lmk[idx1*2 + 1] - lmk[idx2*2 + 1];
-    return std::sqrt(dx*dx + dy*dy);
-}
-
 LivePortraitPipeline::LivePortraitPipeline(const std::string& checkpoints_dir, cudaStream_t stream) 
     : stream(stream), is_first_frame(true), frame_count(0),
       f_p(25.0, 0.05, 0.005), f_y(25.0, 0.05, 0.005), f_r(25.0, 0.05, 0.005) {
@@ -82,6 +76,9 @@ LivePortraitPipeline::LivePortraitPipeline(const std::string& checkpoints_dir, c
     landmark_engine = std::make_unique<TRTWrapper>(base + "landmark.trt", stream);
     face_det_engine = std::make_unique<TRTWrapper>(base + "retinaface_det_static.trt", stream);
     face_pose_engine = std::make_unique<TRTWrapper>(base + "face_2dpose_106_static.trt", stream);
+    
+    // Load official eyeblink engine (66 inputs)
+    eyeblink_engine = std::make_unique<TRTWrapper>("eyeblink.engine", stream);
 
     gpu_input_motion_d = mem->allocateDevice(3 * 256 * 256 * sizeof(float), "gpu_input_motion_d");
     gpu_input_landmark_d = mem->allocateDevice(3 * 224 * 224 * sizeof(float), "gpu_input_lmk_d");
@@ -115,6 +112,10 @@ LivePortraitPipeline::LivePortraitPipeline(const std::string& checkpoints_dir, c
     gpu_stitching_eye_out = mem->allocateDevice(65 * sizeof(float), "stitching_eye_out");
     gpu_stitching_lip_out = mem->allocateDevice(65 * sizeof(float), "stitching_lip_out");
 
+    // Eyeblink Engine expects 66 inputs (63 source kp + 3 eye params)
+    gpu_eye_params = mem->allocateDevice(66 * sizeof(float), "eye_params_concat");
+    gpu_eyeblink_delta = mem->allocateDevice(63 * sizeof(float), "eyeblink_delta");
+
     gpu_kp_final = mem->allocateDevice(63 * sizeof(float), "kp_final");
     gpu_out_frame = mem->allocateDevice(3 * 512 * 512 * sizeof(float), "gpu_out_frame");
 
@@ -124,6 +125,7 @@ LivePortraitPipeline::LivePortraitPipeline(const std::string& checkpoints_dir, c
     h_t = (float*)mem->allocatePinned(3 * sizeof(float), "h_t");
     h_scale = (float*)mem->allocatePinned(1 * sizeof(float), "h_scale");
     h_lmk = (float*)mem->allocatePinned(203 * 2 * sizeof(float), "h_lmk");
+    h_eye_params = (float*)mem->allocatePinned(66 * sizeof(float), "h_eye_params_concat");
     
     gpu_R_final = mem->allocateDevice(9 * sizeof(float), "R_final");
     gpu_t_final = mem->allocateDevice(3 * sizeof(float), "t_final");
@@ -179,6 +181,8 @@ bool LivePortraitPipeline::initSource(const std::string& image_path) {
     preprocessImage(src_square, gpu_input_lmk_s, 224, 224, true);
     landmark_engine->execute({{"input", gpu_input_lmk_s}}, {{"output", gpu_lmk_d_out1}, {"853", gpu_lmk_d_out2}, {"856", gpu_lmk_d_out3}});
     launch_calc_ratios((float*)gpu_lmk_d_out3, (float*)gpu_eye_ratio_s, (float*)gpu_lip_ratio_s, stream);
+    // Read back source eye ratios to store for retargeting
+    cudaMemcpyAsync(s_eye_ratio, gpu_eye_ratio_s, 2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
 
     void* gpu_input_motion_s = mem->allocateDevice(3 * 256 * 256 * sizeof(float), "src_motion_input");
     preprocessImage(src_square, gpu_input_motion_s, 256, 256, true);
@@ -201,7 +205,10 @@ bool LivePortraitPipeline::initSource(const std::string& image_path) {
     return true;
 }
 
-bool LivePortraitPipeline::processFrame(const void* in_data, void* out_data, int width, int height) {
+bool LivePortraitPipeline::processFrame(const void* in_data, void* out_data, int width, int height,
+                                        bool enable_eye_retargeting, float eyes_open_ratio,
+                                        float eye_retargeting_strength,
+                                        float gaze_x, float gaze_y) {
     if (src_img.empty()) return false;
     cv::Mat d_frame(height, width, CV_8UC3, (void*)in_data);
     preprocessImage(d_frame, gpu_input_motion_d, 256, 256, false);
@@ -232,18 +239,6 @@ bool LivePortraitPipeline::processFrame(const void* in_data, void* out_data, int
     get_rotation_matrix(f_p.process(headpose_pred_to_degree(h_pitch)), f_y.process(headpose_pred_to_degree(h_yaw)), f_r.process(headpose_pred_to_degree(h_roll)), R_d_i);
     get_rotation_matrix(d_0_pitch_deg, d_0_yaw_deg, d_0_roll_deg, R_d_0);
     
-    // R_d_i and R_d_0 from get_rotation_matrix are already transposed (rot.T).
-    // In Python: R_rel = R_d_i @ R_d_0.T
-    // Here: R_rel = R_d_i @ R_d_0_raw
-    // Since R_d_0 = R_d_0_raw.T, then R_d_0.T = R_d_0_raw.
-    // Wait, let's rethink:
-    // get_rotation_matrix returns R = (RyRxRz).T
-    // So R_d_0 = (Ry0 Rx0 Rz0).T
-    // We want R_rel = (Ryi Rxi Rzi) @ (Ry0 Rx0 Rz0).T
-    // R_rel = R_d_i.T @ R_d_0
-    // Actually, it's simpler to just use the raw matrices if we want R_rel.
-    // But let's follow the logic: R_new = R_rel @ R_s
-    
     for(int i=0; i<3; ++i) for(int j=0; j<3; ++j) { R_rel[i*3+j] = 0; for(int k=0; k<3; ++k) R_rel[i*3+j] += R_d_i[i*3+k] * R_d_0[k*3+j]; }
     for(int i=0; i<3; ++i) for(int j=0; j<3; ++j) { R_new[i*3+j] = 0; for(int k=0; k<3; ++k) R_new[i*3+j] += R_rel[i*3+k] * R_s[k*3+j]; }
     
@@ -256,20 +251,34 @@ bool LivePortraitPipeline::processFrame(const void* in_data, void* out_data, int
     
     launch_concat_feat((float*)x_s, 63, (float*)gpu_kp_rel, 63, (float*)gpu_stitching_input, stream);
     stitching_engine->execute({{"input", gpu_stitching_input}}, {{"output", gpu_stitching_out}});
+    launch_calc_ratios((float*)gpu_lmk_d_out3, (float*)gpu_eye_ratio_d, (float*)gpu_lip_ratio_d, stream);
     launch_concat_feat((float*)gpu_eye_ratio_s, 2, (float*)gpu_eye_ratio_d, 2, (float*)gpu_eye_ratio_combined, stream);
     launch_concat_feat((float*)gpu_lip_ratio_s, 1, (float*)gpu_lip_ratio_d, 1, (float*)gpu_lip_ratio_combined, stream);
     
-    void* gpu_feat_eye = mem->getBuffer("feat_eye_diag"); if(!gpu_feat_eye) gpu_feat_eye = mem->allocateDevice(67*4, "feat_eye_diag");
-    void* gpu_feat_lip = mem->getBuffer("feat_lip_diag"); if(!gpu_feat_lip) gpu_feat_lip = mem->allocateDevice(65*4, "feat_lip_diag");
+    void* gpu_feat_eye = mem->getBuffer("feat_eye_diag"); if(!gpu_feat_eye) gpu_feat_eye = mem->allocateDevice(67*sizeof(float), "feat_eye_diag");
+    void* gpu_feat_lip = mem->getBuffer("feat_lip_diag"); if(!gpu_feat_lip) gpu_feat_lip = mem->allocateDevice(65*sizeof(float), "feat_lip_diag");
     launch_concat_feat((float*)x_s, 63, (float*)gpu_eye_ratio_combined, 4, (float*)gpu_feat_eye, stream);
     launch_concat_feat((float*)x_s, 63, (float*)gpu_lip_ratio_combined, 2, (float*)gpu_feat_lip, stream);
     stitching_eye_engine->execute({{"input", gpu_feat_eye}}, {{"output", gpu_stitching_eye_out}});
     stitching_lip_engine->execute({{"input", gpu_feat_lip}}, {{"output", gpu_stitching_lip_out}});
     launch_add_deltas((float*)gpu_kp_rel, (float*)gpu_stitching_out, (float*)gpu_stitching_eye_out, (float*)gpu_stitching_lip_out, 21, stream);
 
-    // Apply driving multiplier (Default 1.0, but let's ensure we follow the code: x_s + (x_d_i_new - x_s) * multiplier)
-    // multiplier=1.0 simplifies to x_d_i_new, but we must use it correctly.
-    
+    // Corrected Dynamic Eye Retargeting (66 inputs: source face + params [s_left, s_right, target])
+    if (enable_eye_retargeting) {
+        // Read back x_s to CPU to concatenate with params
+        cudaMemcpyAsync(h_eye_params, x_s, 63 * sizeof(float), cudaMemcpyDeviceToHost, stream);
+        cudaStreamSynchronize(stream);
+        // Correct parameter mapping: [source_left, source_right, target]
+        h_eye_params[63] = s_eye_ratio[0];
+        h_eye_params[64] = s_eye_ratio[1];
+        h_eye_params[65] = eyes_open_ratio;
+        cudaMemcpyAsync(gpu_eye_params, h_eye_params, 66 * sizeof(float), cudaMemcpyHostToDevice, stream);
+        // Corrected tensor names: "input" and "output"
+        eyeblink_engine->execute({{"input", gpu_eye_params}}, {{"output", gpu_eyeblink_delta}});
+        // Apply multiplier (strength) to achieves full blink
+        launch_add_latent_delta((float*)gpu_kp_rel, (float*)gpu_eyeblink_delta, 21, eye_retargeting_strength, stream);
+    }
+
     warping_engine->execute({{"feature_3d", f_s}, {"kp_source", gpu_kp_s_transformed}, {"kp_driving", gpu_kp_rel}}, {{"out", gpu_out_frame}});
     void* gpu_raw_out = mem->allocateDevice(512 * 512 * 3, "tmp_gpu_raw_out");
     launch_postprocess((float*)gpu_out_frame, (uint8_t*)gpu_raw_out, 512, 512, false, stream);

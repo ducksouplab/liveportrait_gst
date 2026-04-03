@@ -53,7 +53,10 @@ public:
     ~LivePortraitPipeline();
 
     bool initSource(const std::string& image_path);
-    bool processFrame(const void* in_data, void* out_data, int width, int height);
+    bool processFrame(const void* in_data, void* out_data, int width, int height,
+                      bool enable_eye_retargeting = false, float eyes_open_ratio = 0.0f,
+                      float eye_retargeting_strength = 1.0f,
+                      float gaze_x = 0.0f, float gaze_y = 0.0f);
 
 private:
     void preprocessImage(const cv::Mat& img, void* gpu_ptr, int target_w, int target_h, bool bgr_to_rgb);
@@ -75,6 +78,7 @@ private:
     std::unique_ptr<TRTWrapper> landmark_engine;
     std::unique_ptr<TRTWrapper> face_det_engine;
     std::unique_ptr<TRTWrapper> face_pose_engine;
+    std::unique_ptr<TRTWrapper> eyeblink_engine;
 
     // Intermediate and Source data
     cv::Mat src_img;
@@ -96,6 +100,7 @@ private:
     float s_pitch_deg, s_yaw_deg, s_roll_deg;
     float s_t[3];
     float s_scale;
+    float s_eye_ratio[2];
     float R_s[9];
 
     // Driving Reference (Frame 0)
@@ -138,8 +143,12 @@ private:
     void* gpu_kp_final;
     void* gpu_out_frame;
 
+    void* gpu_eye_params; // Now 66 floats: x_s (63) + params (3)
+    void* gpu_eyeblink_delta;
+
     // CPU Pinned buffers for reading back small tensors
     float *h_pitch, *h_yaw, *h_roll, *h_t, *h_scale, *h_lmk;
+    float *h_eye_params;
 
     // Profiling
     cudaEvent_t ev_start, ev_end;

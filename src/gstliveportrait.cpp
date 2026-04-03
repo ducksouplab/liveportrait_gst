@@ -12,7 +12,12 @@ enum
 {
   PROP_0,
   PROP_SOURCE_IMAGE,
-  PROP_CONFIG_PATH
+  PROP_CONFIG_PATH,
+  PROP_ENABLE_EYE_RETARGETING,
+  PROP_EYES_OPEN_RATIO,
+  PROP_EYE_RETARGETING_STRENGTH,
+  PROP_GAZE_X,
+  PROP_GAZE_Y,
 };
 
 #define VIDEO_CAPS \
@@ -51,8 +56,33 @@ gst_liveportrait_class_init (GstLivePortraitClass * klass)
           NULL, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
   g_object_class_install_property (gobject_class, PROP_CONFIG_PATH,
-      g_param_spec_string ("config-path", "Config Path", "Path to YAML config",
-          NULL, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+      g_param_spec_string ("config-path", "Config Path", "Path to checkpoints directory",
+          NULL, (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_ENABLE_EYE_RETARGETING,
+      g_param_spec_boolean ("enable-eye-retargeting", "Enable Eye Retargeting",
+          "Enable dynamic eyelid closure and gaze control", FALSE,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_EYES_OPEN_RATIO,
+      g_param_spec_float ("eyes-open-ratio", "Eyes Open Ratio",
+          "Eyes open ratio (0.0 to 1.0)", 0.0, 1.0, 0.0,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_EYE_RETARGETING_STRENGTH,
+      g_param_spec_float ("eye-retargeting-strength", "Eye Retargeting Strength",
+          "Multiplier for eye retargeting delta", 0.0, 10.0, 1.0,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_GAZE_X,
+      g_param_spec_float ("gaze-x", "Gaze X",
+          "Gaze direction X (-1.0 to 1.0)", -1.0, 1.0, 0.0,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_GAZE_Y,
+      g_param_spec_float ("gaze-y", "Gaze Y",
+          "Gaze direction Y (-1.0 to 1.0)", -1.0, 1.0, 0.0,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
   gst_element_class_add_pad_template (GST_ELEMENT_CLASS (klass),
       gst_pad_template_new ("src", GST_PAD_SRC, GST_PAD_ALWAYS, gst_caps_from_string (VIDEO_CAPS)));
@@ -68,9 +98,13 @@ gst_liveportrait_init (GstLivePortrait * self)
 {
   self->source_image = NULL;
   self->config_path = NULL;
+  self->enable_eye_retargeting = FALSE;
+  self->eyes_open_ratio = 0.0f;
+  self->eye_retargeting_strength = 1.0f;
+  self->gaze_x = 0.0f;
+  self->gaze_y = 0.0f;
   self->cuda_initialized = FALSE;
-  self->memory_manager = NULL;
-  self->trt_wrapper = NULL;
+  self->pipeline = NULL;
 }
 
 static void
@@ -81,14 +115,9 @@ gst_liveportrait_finalize (GObject * object)
   g_free (self->source_image);
   g_free (self->config_path);
 
-  if (self->memory_manager) {
-    delete (CudaMemoryManager*)self->memory_manager;
-    self->memory_manager = NULL;
-  }
-
-  if (self->trt_wrapper) {
-    delete (LivePortraitPipeline*)self->trt_wrapper;
-    self->trt_wrapper = NULL;
+  if (self->pipeline) {
+    delete self->pipeline;
+    self->pipeline = NULL;
   }
 
   G_OBJECT_CLASS (gst_liveportrait_parent_class)->finalize (object);
@@ -108,6 +137,21 @@ gst_liveportrait_set_property (GObject * object, guint prop_id, const GValue * v
       g_free (self->config_path);
       self->config_path = g_value_dup_string (value);
       break;
+    case PROP_ENABLE_EYE_RETARGETING:
+      self->enable_eye_retargeting = g_value_get_boolean (value);
+      break;
+    case PROP_EYES_OPEN_RATIO:
+      self->eyes_open_ratio = g_value_get_float (value);
+      break;
+    case PROP_EYE_RETARGETING_STRENGTH:
+      self->eye_retargeting_strength = g_value_get_float (value);
+      break;
+    case PROP_GAZE_X:
+      self->gaze_x = g_value_get_float (value);
+      break;
+    case PROP_GAZE_Y:
+      self->gaze_y = g_value_get_float (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -125,6 +169,21 @@ gst_liveportrait_get_property (GObject * object, guint prop_id, GValue * value, 
       break;
     case PROP_CONFIG_PATH:
       g_value_set_string (value, self->config_path);
+      break;
+    case PROP_ENABLE_EYE_RETARGETING:
+      g_value_set_boolean (value, self->enable_eye_retargeting);
+      break;
+    case PROP_EYES_OPEN_RATIO:
+      g_value_set_float (value, self->eyes_open_ratio);
+      break;
+    case PROP_EYE_RETARGETING_STRENGTH:
+      g_value_set_float (value, self->eye_retargeting_strength);
+      break;
+    case PROP_GAZE_X:
+      g_value_set_float (value, self->gaze_x);
+      break;
+    case PROP_GAZE_Y:
+      g_value_set_float (value, self->gaze_y);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -146,13 +205,11 @@ gst_liveportrait_start (GstBaseTransform * trans)
     return FALSE;
   }
 
-  self->memory_manager = new CudaMemoryManager();
-  
   if (self->config_path) {
     try {
-        self->trt_wrapper = new LivePortraitPipeline(self->config_path, self->stream);
+        self->pipeline = new LivePortraitPipeline(self->config_path, self->stream);
         if (self->source_image) {
-            ((LivePortraitPipeline*)self->trt_wrapper)->initSource(self->source_image);
+            self->pipeline->initSource(self->source_image);
         }
     } catch (const std::exception& e) {
         GST_ERROR_OBJECT (self, "Failed to initialize LivePortrait pipeline: %s", e.what());
@@ -169,19 +226,14 @@ gst_liveportrait_stop (GstBaseTransform * trans)
 {
   GstLivePortrait *self = GST_LIVEPORTRAIT (trans);
 
+  if (self->pipeline) {
+    delete self->pipeline;
+    self->pipeline = NULL;
+  }
+
   if (self->cuda_initialized) {
     cudaStreamDestroy (self->stream);
     self->cuda_initialized = FALSE;
-  }
-
-  if (self->memory_manager) {
-    delete (CudaMemoryManager*)self->memory_manager;
-    self->memory_manager = NULL;
-  }
-
-  if (self->trt_wrapper) {
-    delete (LivePortraitPipeline*)self->trt_wrapper;
-    self->trt_wrapper = NULL;
   }
 
   return TRUE;
@@ -191,14 +243,17 @@ static GstFlowReturn
 gst_liveportrait_transform_frame (GstVideoFilter * filter, GstVideoFrame * in_frame, GstVideoFrame * out_frame)
 {
   GstLivePortrait *self = GST_LIVEPORTRAIT (filter);
-  LivePortraitPipeline *pipe = (LivePortraitPipeline*)self->trt_wrapper;
 
-  if (pipe) {
-      /* Full logic to be implemented in sub-tasks */
-      pipe->processFrame(GST_VIDEO_FRAME_PLANE_DATA(in_frame, 0), 
+  if (self->pipeline) {
+      self->pipeline->processFrame(GST_VIDEO_FRAME_PLANE_DATA(in_frame, 0), 
                          GST_VIDEO_FRAME_PLANE_DATA(out_frame, 0),
                          GST_VIDEO_FRAME_WIDTH(in_frame),
-                         GST_VIDEO_FRAME_HEIGHT(in_frame));
+                         GST_VIDEO_FRAME_HEIGHT(in_frame),
+                         self->enable_eye_retargeting,
+                         self->eyes_open_ratio,
+                         self->eye_retargeting_strength,
+                         self->gaze_x,
+                         self->gaze_y);
   } else {
       gst_video_frame_copy (out_frame, in_frame);
   }

@@ -21,6 +21,11 @@ def process_liveportrait(
     plugin_path="./build",
     crop_left=280,
     crop_right=280,
+    enable_eye_retargeting=False,
+    eyes_open_ratio=0.0,
+    eye_retargeting_strength=1.0,
+    gaze_x=0.0,
+    gaze_y=0.0,
     docker_image="ducksouplab/liveportrait_gst:latest",
     verbose=False
 ):
@@ -50,13 +55,23 @@ def process_liveportrait(
     docker_config = "/checkpoints"
     docker_plugin = "/plugin"
     
+    # Eye retargeting string
+    eye_str = ""
+    if enable_eye_retargeting:
+        eye_str = (
+            f"enable-eye-retargeting=true "
+            f"eyes-open-ratio={eyes_open_ratio} "
+            f"eye-retargeting-strength={eye_retargeting_strength} "
+            f"gaze-x={gaze_x} gaze-y={gaze_y} "
+        )
+
     # Prepare the pipeline string
     pipeline = (
         f"filesrc location={docker_work}/{input_file} ! "
         f"decodebin ! videoconvert ! "
         f"videocrop left={crop_left} right={crop_right} ! "
         f"videoscale ! video/x-raw,width=512,height=512,format=RGB ! "
-        f"liveportrait config-path={docker_config} source-image={docker_source}/{source_file} ! "
+        f"liveportrait config-path={docker_config} source-image={docker_source}/{source_file} {eye_str}! "
         f"videoconvert ! x264enc ! mp4mux ! "
         f"filesink location={docker_work}/{output_file}"
     )
@@ -85,8 +100,6 @@ def process_liveportrait(
         "gst-launch-1.0", "-q"
     ])
     
-    # Note: we don't split by spaces because paths might have spaces, 
-    # but for simple gstreamer strings, split is usually safe.
     docker_cmd.extend(pipeline.split())
 
     run_command(docker_cmd, verbose)
@@ -106,8 +119,15 @@ def main():
     parser.add_argument("--crop-left", type=int, default=280, help="Left crop for aspect ratio correction")
     parser.add_argument("--crop-right", type=int, default=280, help="Right crop for aspect ratio correction")
     
+    # Eye Retargeting
+    parser.add_argument("--enable-eye-retargeting", action="store_true", help="Enable dynamic eye retargeting")
+    parser.add_argument("--eyes-open-ratio", type=float, default=0.0, help="Target eye open ratio (0.0 to 1.0)")
+    parser.add_argument("--eye-retargeting-strength", type=float, default=1.0, help="Multiplier for eye delta")
+    parser.add_argument("--gaze-x", type=float, default=0.0, help="Gaze direction X")
+    parser.add_argument("--gaze-y", type=float, default=0.0, help="Gaze direction Y")
+
     # Docker settings
-    parser.add_argument("--docker-image", default="gst-liveportrait-env", help="Docker image name")
+    parser.add_argument("--docker-image", default="ducksouplab/liveportrait_gst:latest", help="Docker image name")
     parser.add_argument("--verbose", action="store_true", help="Print verbose execution info")
 
     args = parser.parse_args()
@@ -121,6 +141,11 @@ def main():
             plugin_path=args.plugin_path,
             crop_left=args.crop_left,
             crop_right=args.crop_right,
+            enable_eye_retargeting=args.enable_eye_retargeting,
+            eyes_open_ratio=args.eyes_open_ratio,
+            eye_retargeting_strength=args.eye_retargeting_strength,
+            gaze_x=args.gaze_x,
+            gaze_y=args.gaze_y,
             docker_image=args.docker_image,
             verbose=args.verbose
         )

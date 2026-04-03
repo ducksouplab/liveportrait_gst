@@ -16,6 +16,7 @@ void launch_apply_stitching(float* kp, const float* delta, int num_kp, cudaStrea
 void launch_add_deltas(float* kp, const float* d1, const float* d2, const float* d3, int num_kp, cudaStream_t stream);
 void launch_concat_feat(const float* kp1, int size1, const float* kp2, int size2, float* out, cudaStream_t stream);
 void launch_calc_ratios(const float* lmk, float* eye_ratio, float* lip_ratio, cudaStream_t stream);
+void launch_add_latent_delta(float* kp, const float* delta, int num_kp, float multiplier, cudaStream_t stream);
 
 #ifdef __cplusplus
 }

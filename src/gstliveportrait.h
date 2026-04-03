@@ -19,13 +19,19 @@ struct _GstLivePortrait
   gchar *source_image;
   gchar *config_path;
 
+  /* Eye retargeting properties */
+  gboolean enable_eye_retargeting;
+  gfloat eyes_open_ratio;
+  gfloat eye_retargeting_strength;
+  gfloat gaze_x;
+  gfloat gaze_y;
+
   /* CUDA state */
   cudaStream_t stream;
   gboolean cuda_initialized;
 
-  /* Internal state (to be expanded in later phases) */
-  void *memory_manager;
-  void *trt_wrapper;
+  /* Internal state */
+  class LivePortraitPipeline *pipeline;
 };
 
 G_END_DECLS

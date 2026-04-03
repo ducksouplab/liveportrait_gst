@@ -29,6 +29,28 @@ This implementation is based on the architecture and custom CUDA kernels defined
 | :--- | :--- | :--- | :--- |
 | `config-path` | `string` | Path to the directory containing the TensorRT engines (e.g., `./checkpoints`). | `NULL` |
 | `source-image` | `string` | Path to the static source image (e.g., `assets/test_image.jpg`). | `NULL` |
+| `enable-eye-retargeting` | `boolean` | Enable dynamic eyelid closure and gaze control. | `false` |
+| `eyes-open-ratio` | `float` | Target ratio for eye closure (0.0 = closed, 1.0 = open). | `0.0` |
+| `eye-retargeting-strength` | `float` | Multiplier to amplify the eye closure effect (e.g., 1.5 or 2.0). | `1.0` |
+| `gaze-x` | `float` | Gaze direction horizontal (-1.0 to 1.0). *Requires gaze-enabled engine.* | `0.0` |
+| `gaze-y` | `float` | Gaze direction vertical (-1.0 to 1.0). *Requires gaze-enabled engine.* | `0.0` |
+
+## Dynamic Eye Retargeting
+
+This feature allows you to override the eye movements from the driving video with manual controls. To use it, you must compile the `eyeblink.engine` using the official `stitching_eye.onnx`.
+
+### 1. Download and Compile the Eye Engine
+```bash
+wget https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/stitching_eye.onnx
+docker run --rm --gpus all -v $(pwd):/workspace -w /workspace ducksouplab/liveportrait_gst:latest \
+    python3 compile_trt.py 
+```
+
+### 2. Usage in Pipeline
+```bash
+gst-launch-1.0 ... ! liveportrait config-path=./checkpoints source-image=img.jpg \
+    enable-eye-retargeting=true eyes-open-ratio=0.0 eye-retargeting-strength=1.5 ! ...
+```
 
 ## Source Image Constraints
 

@@ -120,6 +120,15 @@ __global__ void calc_ratios_kernel(const float* lmk, float* eye_ratio, float* li
     lip_ratio[0] = dev_dist(lmk, 90, 102) / (dev_dist(lmk, 48, 66) + 1e-6f);
 }
 
+__global__ void add_latent_delta_kernel(float* kp, const float* delta, int num_kp, float multiplier) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < num_kp) {
+        kp[i * 3 + 0] += delta[i * 3 + 0] * multiplier;
+        kp[i * 3 + 1] += delta[i * 3 + 1] * multiplier;
+        kp[i * 3 + 2] += delta[i * 3 + 2] * multiplier;
+    }
+}
+
 extern "C" {
 
 void launch_preprocess(const uint8_t* src, float* dst, int w, int h, bool bgr_to_rgb, cudaStream_t stream) {
@@ -167,6 +176,12 @@ void launch_concat_feat(const float* kp1, int size1, const float* kp2, int size2
 
 void launch_calc_ratios(const float* lmk, float* eye_ratio, float* lip_ratio, cudaStream_t stream) {
     calc_ratios_kernel<<<1, 1, 0, stream>>>(lmk, eye_ratio, lip_ratio);
+}
+
+void launch_add_latent_delta(float* kp, const float* delta, int num_kp, float multiplier, cudaStream_t stream) {
+    int threads = 64;
+    int blocks = (num_kp + threads - 1) / threads;
+    add_latent_delta_kernel<<<blocks, threads, 0, stream>>>(kp, delta, num_kp, multiplier);
 }
 
 }
