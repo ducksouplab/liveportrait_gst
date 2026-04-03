@@ -2,3 +2,7 @@ checkpoints/
 build/
 outputs/
 results/
+*.onnx
+*.engine
+*.pyc
+__pycache__/

@@ -78,7 +78,7 @@ LivePortraitPipeline::LivePortraitPipeline(const std::string& checkpoints_dir, c
     face_pose_engine = std::make_unique<TRTWrapper>(base + "face_2dpose_106_static.trt", stream);
     
     // Load official eyeblink engine (66 inputs)
-    eyeblink_engine = std::make_unique<TRTWrapper>("eyeblink.engine", stream);
+    eyeblink_engine = std::make_unique<TRTWrapper>(base + "eyeblink.engine", stream);
 
     gpu_input_motion_d = mem->allocateDevice(3 * 256 * 256 * sizeof(float), "gpu_input_motion_d");
     gpu_input_landmark_d = mem->allocateDevice(3 * 224 * 224 * sizeof(float), "gpu_input_lmk_d");
